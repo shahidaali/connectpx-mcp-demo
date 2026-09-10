@@ -1,14 +1,12 @@
-import { cors, signToken } from '../../lib/store.js';
+import { cors, registerClient } from '../../lib/store.js';
 
 /**
- * Dynamic Client Registration (RFC7591) — stateless version.
+ * Dynamic Client Registration (RFC7591) — stateless.
  *
- * The problem: Vercel serverless functions spin up fresh for every request,
- * so an in-memory Map() is wiped between /oauth/register and /oauth/token.
- *
- * The fix: encode the client's redirect_uris into a signed JWT and return
- * THAT as the client_id. The token endpoint verifies the JWT directly —
- * no database or shared memory needed.
+ * We accept any client and return a short opaque client_id.
+ * We don't store anything — the client_id + redirect_uri get
+ * embedded in the signed auth code when the user approves,
+ * so token exchange just verifies the code signature.
  */
 export default async function handler(req, res) {
   cors(res);
@@ -19,43 +17,37 @@ export default async function handler(req, res) {
   const redirectUris = body.redirect_uris || [];
 
   if (!redirectUris.length) {
-    return res.status(400).json({ error: 'invalid_client_metadata', error_description: 'redirect_uris required' });
+    return res.status(400).json({
+      error: 'invalid_client_metadata',
+      error_description: 'redirect_uris is required',
+    });
   }
 
-  // Accept any https redirect URI, or http localhost — standard OAuth rule
+  // Validate redirect URIs — must be https or http localhost
   for (const uri of redirectUris) {
     try {
       const p = new URL(uri);
       const ok = p.protocol === 'https:' ||
                  (p.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(p.hostname));
-      if (!ok) return res.status(400).json({ error: 'invalid_redirect_uri', error_description: `Invalid URI: ${uri}` });
+      if (!ok) return res.status(400).json({
+        error: 'invalid_redirect_uri',
+        error_description: `URI must be https or localhost: ${uri}`,
+      });
     } catch {
       return res.status(400).json({ error: 'invalid_redirect_uri', error_description: `Malformed URI: ${uri}` });
     }
   }
 
-  const clientName = body.client_name || 'Unknown Client';
-  const issuedAt   = Math.floor(Date.now() / 1000);
+  const clientId = await registerClient(body);
 
-  // Encode the client registration INTO the client_id as a signed JWT.
-  // This survives across serverless invocations — no storage needed.
-  const clientId = await signToken({
-    type:          'dyn_client',
-    client_name:   clientName,
-    redirect_uris: redirectUris,
-    issued_at:     issuedAt,
-  }, '365d'); // long-lived — it's an identity, not a secret
-
-  const response = {
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(201).json({
     client_id:                   clientId,
-    client_name:                 clientName,
+    client_name:                 body.client_name || 'Unknown Client',
     redirect_uris:               redirectUris,
     grant_types:                 body.grant_types    || ['authorization_code'],
     response_types:              body.response_types  || ['code'],
     token_endpoint_auth_method:  body.token_endpoint_auth_method || 'none',
-    client_id_issued_at:         issuedAt,
-  };
-
-  res.setHeader('Cache-Control', 'no-store');
-  return res.status(201).json(response);
+    client_id_issued_at:         Math.floor(Date.now() / 1000),
+  });
 }

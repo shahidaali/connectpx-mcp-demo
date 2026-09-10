@@ -1,31 +1,27 @@
-import { cors, baseUrl, authenticateUser, findClient, createAuthCode } from '../../lib/store.js';
+import { cors, authenticateUser, createAuthCode } from '../../lib/store.js';
 
 export default async function handler(req, res) {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
-
   if (req.method === 'GET')  return showForm(req, res);
   if (req.method === 'POST') return processForm(req, res);
   return res.status(405).end();
 }
 
-// ── GET: show login + consent page ────────────────────────────────────
+// ── GET: show login + consent ─────────────────────────────────────────
 
 async function showForm(req, res) {
   const p = req.query;
-  const err = validateParams(p);
-  if (err) return res.status(400).send(errorPage(err));
 
-  const client = await findClient(p.client_id);
-  if (!client) return res.status(400).send(errorPage(`Unknown client_id`));
+  // Validate required OAuth params
+  if (!p.client_id)    return res.status(400).send(errorPage('Missing client_id'));
+  if (!p.redirect_uri) return res.status(400).send(errorPage('Missing redirect_uri'));
+  if (p.response_type !== 'code') return res.status(400).send(errorPage('response_type must be "code"'));
+  if (!p.code_challenge) return res.status(400).send(errorPage('PKCE required: missing code_challenge'));
+  if (p.code_challenge_method !== 'S256') return res.status(400).send(errorPage('code_challenge_method must be S256'));
 
-  // Validate redirect_uri — dynamic clients embed their URIs in the JWT
-  // Static dashboard client accepts any URI for demo convenience
-  if (client.redirect_uris?.length > 0 && !client.redirect_uris.includes(p.redirect_uri)) {
-    return res.status(400).send(errorPage(`redirect_uri not registered for this client`));
-  }
-
-  const clientName = client?.client_name || p.client_id;
+  // Derive a display name from client_id (any format — short id, URL, JWT prefix)
+  const clientName = deriveClientName(p.client_id, p.client_name);
 
   const scopes = (p.scope || 'mcp:read profile').split(' ').filter(Boolean);
   const scopeLabels = {
@@ -33,12 +29,11 @@ async function showForm(req, res) {
     'mcp:write': 'Update data on your behalf',
     'profile':   'View your profile information',
   };
-
   const scopeHtml = scopes.map(s =>
-    `<li><span class="check">✓</span>${scopeLabels[s] || s}</li>`
+    `<li><span class="check">✓</span>${scopeLabels[s] || esc(s)}</li>`
   ).join('');
 
-  // Encode all params into a hidden field so POST can reconstruct them
+  // Store all OAuth params in a hidden field for the POST
   const paramsEncoded = Buffer.from(JSON.stringify(p)).toString('base64');
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -60,7 +55,7 @@ async function showForm(req, res) {
   .client-box{background:#1a1a2e;border:1px solid #252545;border-radius:10px;padding:16px;margin-bottom:22px}
   .client-name{font-weight:700;font-size:15px;color:#e2e8f0}
   .client-sub{font-size:12px;color:#64748b;margin-top:3px}
-  .resource{font-size:11px;color:#a78bfa;background:#1e1650;padding:2px 8px;border-radius:10px;display:inline-block;margin-top:6px}
+  .resource{font-size:11px;color:#a78bfa;background:#1e1650;padding:2px 8px;border-radius:10px;display:inline-block;margin-top:8px;word-break:break-all}
   ul.scopes{list-style:none;margin:0 0 24px;padding:0}
   ul.scopes li{display:flex;align-items:center;gap:10px;font-size:13px;color:#cbd5e1;padding:6px 0;border-bottom:1px solid #1e2035}
   ul.scopes li:last-child{border:none}
@@ -77,7 +72,7 @@ async function showForm(req, res) {
   .allow:hover{opacity:.85}
   .deny{background:#1e2035;color:#94a3b8}
   .deny:hover{background:#252545}
-  .hint{text-align:center;font-size:11px;color:#374151;margin-top:18px}
+  .hint{text-align:center;font-size:11px;color:#4b5563;margin-top:18px}
 </style>
 </head>
 <body>
@@ -88,7 +83,7 @@ async function showForm(req, res) {
   <div class="client-box">
     <div class="client-name">${esc(clientName)}</div>
     <div class="client-sub">is requesting access to your account</div>
-    ${p.resource ? `<div class="resource">${esc(p.resource)}</div>` : ''}
+    ${p.resource ? `<div class="resource">${esc(decodeURIComponent(p.resource))}</div>` : ''}
   </div>
 
   <ul class="scopes">${scopeHtml}</ul>
@@ -99,8 +94,7 @@ async function showForm(req, res) {
     <input type="text" name="username" placeholder="your username" required autocomplete="username">
     <label>Password</label>
     <input type="password" name="password" required autocomplete="current-password">
-    <p class="err" id="errMsg">${req.query._error ? 'Invalid credentials. Try again.' : ''}</p>
-
+    <p class="err ${req.query._error ? 'visible' : ''}" id="errMsg">Invalid credentials. Try again.</p>
     <div class="btns">
       <button type="submit" name="action" value="approve" class="btn allow">✓ Allow Access</button>
       <button type="submit" name="action" value="deny"    class="btn deny">✗ Deny</button>
@@ -108,37 +102,35 @@ async function showForm(req, res) {
   </form>
   <p class="hint">Demo credentials: ahmad / demo123 &nbsp;|&nbsp; sara / demo456</p>
 </div>
-<script>
-  document.querySelector('form').addEventListener('submit', function() {
-    document.getElementById('errMsg').className = 'err';
-  });
-  ${req.query._error ? "document.getElementById('errMsg').className='err visible';" : ''}
-</script>
 </body>
 </html>`);
 }
 
-// ── POST: authenticate + redirect with code ───────────────────────────
+// ── POST: validate login, issue auth code, redirect ───────────────────
 
 async function processForm(req, res) {
   const body = req.body || {};
-  const action = body.action;
 
   let params;
-  try { params = JSON.parse(Buffer.from(body._params, 'base64').toString()); }
-  catch { return res.status(400).send(errorPage('Invalid form data')); }
+  try {
+    params = JSON.parse(Buffer.from(body._params, 'base64').toString());
+  } catch {
+    return res.status(400).send(errorPage('Invalid form state. Please try again.'));
+  }
 
-  if (action === 'deny') {
+  if (body.action === 'deny') {
     return redirect(res, params.redirect_uri, { error: 'access_denied', state: params.state });
   }
 
   const user = authenticateUser(body.username?.trim(), body.password);
   if (!user) {
-    // Redirect back to GET with error flag
+    // Re-show form with error flag
     const qs = new URLSearchParams({ ...params, _error: '1' }).toString();
     return res.redirect(302, `/oauth/authorize?${qs}`);
   }
 
+  // Issue signed auth code — embeds client_id, redirect_uri, PKCE challenge
+  // Token endpoint verifies this code instead of looking up a client store
   const code = await createAuthCode({
     user_id:               user.id,
     username:              user.username,
@@ -155,24 +147,35 @@ async function processForm(req, res) {
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-function validateParams(p) {
-  if (!p.client_id)     return 'Missing client_id';
-  if (!p.redirect_uri)  return 'Missing redirect_uri';
-  if (p.response_type !== 'code') return 'response_type must be "code"';
-  if (!p.code_challenge)          return 'PKCE required: missing code_challenge';
-  if (p.code_challenge_method !== 'S256') return 'code_challenge_method must be S256';
-  return null;
+function deriveClientName(clientId, hint) {
+  if (hint) return hint;
+  // MCPJam and other clients send a short opaque id or a URL
+  if (clientId.startsWith('http')) {
+    try { return new URL(clientId).hostname; } catch {}
+  }
+  if (clientId.length < 40) return clientId;
+  return 'AI Client'; // long JWT or unknown
 }
 
 function redirect(res, uri, params) {
-  const u = new URL(uri);
-  for (const [k, v] of Object.entries(params)) { if (v) u.searchParams.set(k, v); }
-  res.redirect(302, u.toString());
+  try {
+    const u = new URL(uri);
+    for (const [k, v] of Object.entries(params)) { if (v) u.searchParams.set(k, v); }
+    res.redirect(302, u.toString());
+  } catch {
+    res.status(400).send(errorPage('Invalid redirect_uri'));
+  }
 }
 
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+function esc(s) {
+  return String(s || '').replace(/[&<>"']/g,
+    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
 
 function errorPage(msg) {
-  return `<html><body style="font:16px sans-serif;padding:40px;background:#0f0f1a;color:#e2e8f0">
-    <h2 style="color:#f87171">Authorization Error</h2><p style="margin-top:12px">${esc(msg)}</p></body></html>`;
+  return `<!DOCTYPE html><html><body style="font:16px sans-serif;padding:40px;background:#0f0f1a;color:#e2e8f0">
+    <h2 style="color:#f87171">Authorization Error</h2>
+    <p style="margin-top:12px;color:#94a3b8">${esc(msg)}</p>
+    <p style="margin-top:20px"><a href="/" style="color:#818cf8">← Back to dashboard</a></p>
+  </body></html>`;
 }
