@@ -62,6 +62,21 @@
                    padding:9px 20px; font-size:13px; font-weight:600;
                    cursor:pointer; white-space:nowrap; transition:.15s; }
     .btn-connect:hover { opacity:.85; }
+    .btn-connect.btn-secondary { background:#1e2035; color:#cbd5e1; }
+    .btn-connect.btn-secondary:hover { background:#252545; opacity:1; }
+
+    .mcp-url-box { background:#0f0f1a; border:1px solid #252545; border-radius:10px;
+                   padding:14px 16px; margin-bottom:20px; }
+    .mcp-url-label { font-size:11px; color:#64748b; font-weight:600;
+                     text-transform:uppercase; letter-spacing:.4px; margin-bottom:8px; }
+    .mcp-url-row { display:flex; gap:10px; align-items:center; }
+    .mcp-url-row code { flex:1; font-size:12px; color:#a78bfa; word-break:break-all;
+                        font-family:monospace; }
+    .btn-copy { background:#252545; color:#e2e8f0; border:none; border-radius:6px;
+                padding:7px 12px; font-size:12px; font-weight:600; cursor:pointer; }
+    .btn-copy:hover { background:#2d3055; }
+    .mcp-note { margin-top:10px; font-size:12px; color:#64748b; line-height:1.45; }
+    .mcp-note code { color:#94a3b8; font-size:11px; }
 
     /* Flow diagram */
     .flow { max-width:860px; margin:0 auto 72px; padding:0 24px; }
@@ -153,41 +168,43 @@
 <!-- Connect card -->
 <div class="connect-card">
   <div class="card-title">AI Connections</div>
-  <div class="card-sub">You’re signed in above. Connect an AI client — OAuth will bind it to this account.</div>
+  <div class="card-sub">You’re signed in above. Connect Claude — it will open Claude.ai, then bring you back here to approve, then return to Claude as Connected.</div>
+
+  <div class="mcp-url-box">
+    <div class="mcp-url-label">Your MCP server URL (must be public HTTPS)</div>
+    <div class="mcp-url-row">
+      <code id="mcpUrl">…</code>
+      <button type="button" class="btn-copy" onclick="copyMcpUrl()">Copy</button>
+    </div>
+    <p class="mcp-note">Claude connects from Anthropic’s cloud — <code>localhost</code> will not work. Deploy to Vercel first.</p>
+  </div>
 
   <div class="ai-row">
     <div class="ai-left">
       <div class="ai-icon">🤖</div>
-      <div><div class="ai-name">Claude (Anthropic)</div><div class="ai-desc">MCP Streamable HTTP + OAuth 2.1</div></div>
+      <div><div class="ai-name">Claude (Anthropic)</div><div class="ai-desc">Opens Claude → Add connector → Connect → authorize in browser</div></div>
     </div>
-    <button class="btn-connect" onclick="startFlow('Claude')">Connect Claude</button>
+    <button class="btn-connect" onclick="connectClaude()">Connect Claude</button>
   </div>
   <div class="ai-row">
     <div class="ai-left">
-      <div class="ai-icon">💬</div>
-      <div><div class="ai-name">ChatGPT (OpenAI)</div><div class="ai-desc">MCP Streamable HTTP + OAuth 2.1</div></div>
+      <div class="ai-icon">🧪</div>
+      <div><div class="ai-name">Local OAuth demo</div><div class="ai-desc">Simulate the flow without Claude (stays on this site)</div></div>
     </div>
-    <button class="btn-connect" onclick="startFlow('ChatGPT')">Connect ChatGPT</button>
-  </div>
-  <div class="ai-row">
-    <div class="ai-left">
-      <div class="ai-icon">⚡</div>
-      <div><div class="ai-name">Custom MCP Client</div><div class="ai-desc">Any MCP 2025-11-25 compatible client</div></div>
-    </div>
-    <button class="btn-connect" onclick="startFlow('MCP Client')">Connect</button>
+    <button class="btn-connect btn-secondary" onclick="startLocalDemo()">Try locally</button>
   </div>
 </div>
 
 <!-- Flow steps -->
 <div class="flow">
-  <h2>How the OAuth 2.1 Flow Works</h2>
+  <h2>How Connect Claude Works</h2>
   <div class="steps">
-    <div class="step"><div class="step-circle">1</div><div class="step-title">App user</div><div class="step-sub">You’re already logged into ConnectPX (Laravel session in production)</div></div>
-    <div class="step"><div class="step-circle">2</div><div class="step-title">Connect AI</div><div class="step-sub">Click Connect Claude — client starts OAuth + PKCE</div></div>
-    <div class="step"><div class="step-circle">3</div><div class="step-title">Approve</div><div class="step-sub">Consent page uses your existing session — no re-login needed</div></div>
-    <div class="step"><div class="step-circle">4</div><div class="step-title">Bind</div><div class="step-sub">Auth code &amp; token embed your user_id</div></div>
-    <div class="step"><div class="step-circle">5</div><div class="step-title">Token</div><div class="step-sub">Client exchanges code + PKCE verifier for JWT</div></div>
-    <div class="step"><div class="step-circle">6</div><div class="step-title">MCP tools</div><div class="step-sub">AI queries only YOUR orders, invoices &amp; profile</div></div>
+    <div class="step"><div class="step-circle">1</div><div class="step-title">Sign in here</div><div class="step-sub">Pick your ConnectPX user (Laravel session in production)</div></div>
+    <div class="step"><div class="step-circle">2</div><div class="step-title">Open Claude</div><div class="step-sub">Connect Claude opens Add custom connector with your MCP URL</div></div>
+    <div class="step"><div class="step-circle">3</div><div class="step-title">Connect</div><div class="step-sub">In Claude click Add, then Connect — Claude starts OAuth</div></div>
+    <div class="step"><div class="step-circle">4</div><div class="step-title">Approve</div><div class="step-sub">Browser opens ConnectPX consent for your user</div></div>
+    <div class="step"><div class="step-circle">5</div><div class="step-title">Return</div><div class="step-sub">Redirect to claude.ai/api/mcp/auth_callback</div></div>
+    <div class="step"><div class="step-circle">6</div><div class="step-title">Authorized</div><div class="step-sub">Claude shows Connected — tools use your user_id</div></div>
   </div>
 </div>
 
@@ -233,12 +250,19 @@
     <h3 id="mTitle">Authorize AI Access</h3>
     <p id="mDesc">The AI client will open this URL to start the OAuth flow.</p>
     <div class="url-box" id="mUrl"></div>
+    <ol id="mSteps" class="modal-steps" style="display:none"></ol>
     <div class="modal-btns">
       <button class="btn-open"  id="btnOpen">Open Authorization Page</button>
       <button class="btn-close" onclick="closeModal()">Cancel</button>
     </div>
   </div>
 </div>
+
+<style>
+  .modal-steps { margin:0 0 20px; padding-left:20px; color:#94a3b8; font-size:13px; line-height:1.6; }
+  .modal-steps li { margin-bottom:8px; }
+  .modal-steps strong { color:#e2e8f0; }
+</style>
 
 <footer>ConnectPX MCP OAuth Demo · MCP spec 2025-11-25 · OAuth 2.1 + PKCE + RFC9728 + RFC8414 · Deploy free on Vercel</footer>
 
@@ -248,6 +272,17 @@ const users = {
   2: { name:'Sara Khan',  initial:'S', username:'sara'  },
 };
 let uid = 1;
+
+function mcpServerUrl() {
+  return location.origin + '/mcp';
+}
+
+function isPublicHost() {
+  const h = location.hostname;
+  return h !== 'localhost' && h !== '127.0.0.1' && h !== '::1';
+}
+
+document.getElementById('mcpUrl').textContent = mcpServerUrl();
 
 async function ensureAppSession(username) {
   // Simulate "user already logged into Laravel" — sets HttpOnly cookie
@@ -272,8 +307,61 @@ async function selectUser(id, el) {
   try { await ensureAppSession(u.username); } catch (e) { console.warn(e); }
 }
 
-// Establish session for default user on load
 ensureAppSession(users[1].username).catch(console.warn);
+
+async function copyMcpUrl() {
+  await navigator.clipboard.writeText(mcpServerUrl());
+  const btn = document.querySelector('.btn-copy');
+  btn.textContent = 'Copied';
+  setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+}
+
+/**
+ * Real Claude flow:
+ * 1. Deep-link into Claude's "Add custom connector" modal (URL prefilled)
+ * 2. User clicks Add, then Connect in Claude
+ * 3. Claude opens OUR /oauth/authorize in the browser
+ * 4. User Allow → 303 redirect to https://claude.ai/api/mcp/auth_callback
+ * 5. Claude shows the connector as Connected / authorized
+ */
+async function connectClaude() {
+  try { await ensureAppSession(users[uid].username); } catch (e) {
+    alert('Could not sign you into ConnectPX: ' + e.message);
+    return;
+  }
+
+  const mcpUrl = mcpServerUrl();
+  const claudeLink =
+    'https://claude.ai/customize/connectors'
+    + '?modal=add-custom-connector'
+    + '&connectorName=' + encodeURIComponent('ConnectPX')
+    + '&connectorUrl=' + encodeURIComponent(mcpUrl);
+
+  document.getElementById('mTitle').textContent = 'Connect Claude';
+  document.getElementById('mDesc').textContent =
+    `Signed in as ${users[uid].name}. Claude must start OAuth — after you approve, the browser returns to Claude as Connected.`;
+
+  document.getElementById('mUrl').innerHTML =
+    `<span class="hi">${mcpUrl}</span>`;
+
+  const steps = document.getElementById('mSteps');
+  steps.style.display = 'block';
+  steps.innerHTML = `
+    <li><strong>Open Claude</strong> — Add custom connector (URL is prefilled).</li>
+    <li>In Claude, click <strong>Add</strong>, then <strong>Connect</strong>.</li>
+    <li>Browser opens ConnectPX consent — click <strong>Allow Access</strong>.</li>
+    <li>You’re sent back to <strong>claude.ai</strong> with the connector authorized.</li>
+  `;
+
+  if (!isPublicHost()) {
+    steps.innerHTML += `<li style="color:#fbbf24"><strong>Warning:</strong> This site is on localhost. Claude cannot reach it. Deploy to Vercel and open the public URL first.</li>`;
+  }
+
+  const btn = document.getElementById('btnOpen');
+  btn.textContent = isPublicHost() ? 'Open Claude to Connect' : 'Open Claude anyway';
+  btn.onclick = () => { window.location.href = claudeLink; };
+  document.getElementById('overlay').classList.add('open');
+}
 
 async function sha256b64url(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
@@ -286,8 +374,8 @@ function randB64url(n = 32) {
   return btoa(String.fromCharCode(...a)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
 }
 
-async function startFlow(clientName) {
-  // Ensure app session matches selected user before OAuth
+/** Local simulation only — does not talk to Claude. */
+async function startLocalDemo() {
   try { await ensureAppSession(users[uid].username); } catch (e) {
     alert('Could not sign you into ConnectPX: ' + e.message);
     return;
@@ -299,7 +387,6 @@ async function startFlow(clientName) {
   const resource   = encodeURIComponent(location.origin + '/mcp');
   const redirectUri= encodeURIComponent(location.origin + '/oauth/callback');
 
-  // localStorage so the popup callback window can finish PKCE exchange
   localStorage.setItem('pkce_verifier', verifier);
   localStorage.setItem('oauth_state', state);
   localStorage.setItem('oauth_client_id', 'connectpx-dashboard');
@@ -316,22 +403,17 @@ async function startFlow(clientName) {
     `login_hint=${encodeURIComponent(users[uid].username)}`,
   ].join('&');
 
-  document.getElementById('mTitle').textContent = `Connect ${clientName}`;
+  document.getElementById('mTitle').textContent = 'Local OAuth demo';
   document.getElementById('mDesc').textContent =
-    `Signed in as ${users[uid].name}. ${clientName} will request access; after you approve, it receives a token scoped to your account.`;
-
-  const display = url
+    'This stays on ConnectPX and does not authorize Claude. Use Connect Claude for the real flow.';
+  document.getElementById('mSteps').style.display = 'none';
+  document.getElementById('mUrl').innerHTML = url
     .replace(/&/g, '\n&')
-    .replace(/(code_challenge=)([^&\n]+)/, '$1<span class="hi">$2</span>')
-    .replace(/(resource=)([^&\n]+)/, '$1<span class="hi">$2</span>');
-  document.getElementById('mUrl').innerHTML = display;
+    .replace(/(code_challenge=)([^&\n]+)/, '$1<span class="hi">$2</span>');
 
-  document.getElementById('btnOpen').onclick = () => {
-    // Same-tab navigation keeps cookies + localStorage for a clean demo.
-    // Real Claude opens its own browser window against the same domain.
-    location.href = url;
-  };
-  document.getElementById('btnOpen').textContent = 'Continue to Authorize';
+  const btn = document.getElementById('btnOpen');
+  btn.textContent = 'Continue to Authorize';
+  btn.onclick = () => { location.href = url; };
   document.getElementById('overlay').classList.add('open');
 }
 

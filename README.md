@@ -47,11 +47,21 @@ MCP_BASE_URL = https://your-project.vercel.app
 
 ## Try the Connect flow in the browser
 
-1. Open `https://your-project.vercel.app/`
+**Important:** Claude reaches your MCP server from Anthropic’s cloud. Use a **public HTTPS** URL (Vercel). `localhost` will not work.
+
+1. Deploy and open `https://your-project.vercel.app/`
 2. Pick **Ahmad** or **Sara** (establishes app session)
-3. Click **Connect Claude** → **Continue to Authorize**
-4. Click **Allow Access** (you’re already signed in — no password)
-5. Callback exchanges the code + PKCE verifier, then calls `get_my_profile` to prove user scoping
+3. Click **Connect Claude** → **Open Claude to Connect**
+4. In Claude: **Add** the connector, then click **Connect**
+5. Browser opens ConnectPX consent → **Allow Access**
+6. You’re redirected to `claude.ai` — connector shows as **Connected**
+
+Deep link used by the button:
+```
+https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=ConnectPX&connectorUrl=https%3A%2F%2Fyour-project.vercel.app%2Fmcp
+```
+
+Use **Try locally** only to simulate OAuth without Claude (stays on this site).
 
 ---
 

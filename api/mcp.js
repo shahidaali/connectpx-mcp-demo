@@ -26,8 +26,9 @@ async function requireToken(req, res) {
 
 function unauthorized(req, res, msg) {
   const base = baseUrl(req);
+  // Claude looks for resource_metadata on the 401 (preferred over probing well-known)
   res.setHeader('WWW-Authenticate',
-    `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource", scope="mcp:read", error="invalid_token", error_description="${msg}"`
+    `Bearer FAKESECRET_g3h4i5j6k7l8m9n0o1p2="${base}/.well-known/oauth-protected-resource/mcp", scope="mcp:read profile"`
   );
   res.status(401).json(rpcErr(-32001, `Unauthorized: ${msg}`, null));
 }

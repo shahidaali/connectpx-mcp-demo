@@ -34,6 +34,10 @@ async function showForm(req, res) {
   // Already logged into ConnectPX (simulates Laravel session)?
   const session = await getAppSession(req);
   const paramsEncoded = Buffer.from(JSON.stringify(p)).toString('base64');
+  const isClaude = String(p.redirect_uri || '').includes('claude.ai');
+  const returningTo = isClaude
+    ? 'After you allow access, you’ll return to <strong>Claude</strong> with this connection authorized.'
+    : 'After you allow access, the AI client will receive an authorization code.';
 
   const accountBlock = session
     ? `<div class="session-box">
@@ -48,8 +52,8 @@ async function showForm(req, res) {
        <p class="err ${p._error ? 'visible' : ''}" id="errMsg">Invalid credentials. Try again.</p>`;
 
   const hint = session
-    ? `<p class="hint">Approving links <strong>${esc(clientName)}</strong> to your existing ConnectPX account.</p>`
-    : `<p class="hint">Demo credentials: ahmad / demo123 &nbsp;|&nbsp; sara / demo456</p>`;
+    ? `<p class="hint">${returningTo}<br>Approving links <strong>${esc(clientName)}</strong> to your existing ConnectPX account.</p>`
+    : `<p class="hint">${returningTo}<br>Demo credentials: ahmad / demo123 &nbsp;|&nbsp; sara / demo456</p>`;
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.status(200).send(`<!DOCTYPE html>
@@ -171,6 +175,7 @@ async function processForm(req, res) {
 
 function deriveClientName(clientId, hint) {
   if (hint) return hint;
+  if (String(clientId).includes('claude') || String(clientId).includes('anthropic')) return 'Claude';
   if (clientId.startsWith('http')) {
     try { return new URL(clientId).hostname; } catch {}
   }
@@ -183,7 +188,8 @@ function redirect(res, uri, params) {
   try {
     const u = new URL(uri);
     for (const [k, v] of Object.entries(params)) { if (v) u.searchParams.set(k, v); }
-    res.redirect(302, u.toString());
+    // 303 after POST — Claude's callback only accepts GET; 307 would re-POST and fail
+    res.redirect(303, u.toString());
   } catch {
     res.status(400).send(errorPage('Invalid redirect_uri'));
   }
