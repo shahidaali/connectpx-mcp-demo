@@ -114,10 +114,10 @@ When Claude opens the authorize URL on your domain, if the user already has a Co
 
 ## Demo credentials (consent page fallback)
 
-| User | Username | Password | Data |
-|------|----------|----------|------|
-| Ahmad Raza (Premium) | `ahmad` | `demo123` | 3 orders, 3 invoices, 1 subscription |
-| Sara Khan (Standard) | `sara` | `demo456` | 2 orders, 2 invoices, 1 subscription |
+| User | Username | Password | Sample data |
+|------|----------|----------|-------------|
+| Ahmad Raza (Premium) | `ahmad` | `demo123` | 9 orders, invoices 2024–2026, 4 subscriptions, usage stats |
+| Sara Khan (Standard) | `sara` | `demo456` | 7 orders, invoices 2024–2026, 3 subscriptions, usage stats |
 
 If the dashboard (or Laravel) already set the app session cookie, password fields are hidden.
 
