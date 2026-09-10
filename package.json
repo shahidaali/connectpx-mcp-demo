@@ -1,0 +1,12 @@
+{
+  "name": "connectpx-mcp-oauth-demo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'no build step'"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  }
+}
