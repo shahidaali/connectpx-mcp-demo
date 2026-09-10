@@ -1,4 +1,4 @@
-import { cors, authenticateUser, createAuthCode } from '../../lib/store.js';
+import { cors, authenticateUser, createAuthCode, getAppSession } from '../../lib/store.js';
 
 export default async function handler(req, res) {
   cors(res);
@@ -20,9 +20,7 @@ async function showForm(req, res) {
   if (!p.code_challenge) return res.status(400).send(errorPage('PKCE required: missing code_challenge'));
   if (p.code_challenge_method !== 'S256') return res.status(400).send(errorPage('code_challenge_method must be S256'));
 
-  // Derive a display name from client_id (any format — short id, URL, JWT prefix)
   const clientName = deriveClientName(p.client_id, p.client_name);
-
   const scopes = (p.scope || 'mcp:read profile').split(' ').filter(Boolean);
   const scopeLabels = {
     'mcp:read':  'Read your orders, invoices & subscriptions',
@@ -33,8 +31,25 @@ async function showForm(req, res) {
     `<li><span class="check">✓</span>${scopeLabels[s] || esc(s)}</li>`
   ).join('');
 
-  // Store all OAuth params in a hidden field for the POST
+  // Already logged into ConnectPX (simulates Laravel session)?
+  const session = await getAppSession(req);
   const paramsEncoded = Buffer.from(JSON.stringify(p)).toString('base64');
+
+  const accountBlock = session
+    ? `<div class="session-box">
+         <div class="session-label">Signed in as</div>
+         <div class="session-name">${esc(session.name)}</div>
+         <div class="session-sub">${esc(session.email)} · ${esc(session.plan)}</div>
+       </div>`
+    : `<label>Username</label>
+       <input type="text" name="username" placeholder="your username" required autocomplete="username" value="${esc(p.login_hint || '')}">
+       <label>Password</label>
+       <input type="password" name="password" required autocomplete="current-password">
+       <p class="err ${p._error ? 'visible' : ''}" id="errMsg">Invalid credentials. Try again.</p>`;
+
+  const hint = session
+    ? `<p class="hint">Approving links <strong>${esc(clientName)}</strong> to your existing ConnectPX account.</p>`
+    : `<p class="hint">Demo credentials: ahmad / demo123 &nbsp;|&nbsp; sara / demo456</p>`;
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.status(200).send(`<!DOCTYPE html>
@@ -56,6 +71,10 @@ async function showForm(req, res) {
   .client-name{font-weight:700;font-size:15px;color:#e2e8f0}
   .client-sub{font-size:12px;color:#64748b;margin-top:3px}
   .resource{font-size:11px;color:#a78bfa;background:#1e1650;padding:2px 8px;border-radius:10px;display:inline-block;margin-top:8px;word-break:break-all}
+  .session-box{background:#0f1f1a;border:1px solid #14532d;border-radius:10px;padding:14px 16px;margin-bottom:8px}
+  .session-label{font-size:11px;color:#4ade80;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+  .session-name{font-size:15px;font-weight:700;color:#e2e8f0;margin-top:4px}
+  .session-sub{font-size:12px;color:#64748b;margin-top:3px}
   ul.scopes{list-style:none;margin:0 0 24px;padding:0}
   ul.scopes li{display:flex;align-items:center;gap:10px;font-size:13px;color:#cbd5e1;padding:6px 0;border-bottom:1px solid #1e2035}
   ul.scopes li:last-child{border:none}
@@ -72,7 +91,8 @@ async function showForm(req, res) {
   .allow:hover{opacity:.85}
   .deny{background:#1e2035;color:#94a3b8}
   .deny:hover{background:#252545}
-  .hint{text-align:center;font-size:11px;color:#4b5563;margin-top:18px}
+  .hint{text-align:center;font-size:11px;color:#4b5563;margin-top:18px;line-height:1.5}
+  .hint strong{color:#94a3b8}
 </style>
 </head>
 <body>
@@ -90,17 +110,13 @@ async function showForm(req, res) {
 
   <form method="POST">
     <input type="hidden" name="_params" value="${paramsEncoded}">
-    <label>Username</label>
-    <input type="text" name="username" placeholder="your username" required autocomplete="username">
-    <label>Password</label>
-    <input type="password" name="password" required autocomplete="current-password">
-    <p class="err ${req.query._error ? 'visible' : ''}" id="errMsg">Invalid credentials. Try again.</p>
+    ${accountBlock}
     <div class="btns">
       <button type="submit" name="action" value="approve" class="btn allow">✓ Allow Access</button>
       <button type="submit" name="action" value="deny"    class="btn deny">✗ Deny</button>
     </div>
   </form>
-  <p class="hint">Demo credentials: ahmad / demo123 &nbsp;|&nbsp; sara / demo456</p>
+  ${hint}
 </div>
 </body>
 </html>`);
@@ -109,7 +125,7 @@ async function showForm(req, res) {
 // ── POST: validate login, issue auth code, redirect ───────────────────
 
 async function processForm(req, res) {
-  const body = req.body || {};
+  const body = await parseFormBody(req);
 
   let params;
   try {
@@ -122,15 +138,21 @@ async function processForm(req, res) {
     return redirect(res, params.redirect_uri, { error: 'access_denied', state: params.state });
   }
 
-  const user = authenticateUser(body.username?.trim(), body.password);
-  if (!user) {
-    // Re-show form with error flag
-    const qs = new URLSearchParams({ ...params, _error: '1' }).toString();
-    return res.redirect(302, `/oauth/authorize?${qs}`);
+  // Prefer existing app session (already logged into ConnectPX / Laravel).
+  // Fall back to username/password on the consent form.
+  let user = null;
+  const session = await getAppSession(req);
+  if (session) {
+    user = { id: session.id, username: session.username, name: session.name, email: session.email, plan: session.plan };
+  } else {
+    user = authenticateUser(body.username?.trim(), body.password);
+    if (!user) {
+      const qs = new URLSearchParams({ ...params, _error: '1' }).toString();
+      return res.redirect(302, `/oauth/authorize?${qs}`);
+    }
   }
 
-  // Issue signed auth code — embeds client_id, redirect_uri, PKCE challenge
-  // Token endpoint verifies this code instead of looking up a client store
+  // Auth code embeds user_id so the AI client token is bound to THIS user.
   const code = await createAuthCode({
     user_id:               user.id,
     username:              user.username,
@@ -149,12 +171,12 @@ async function processForm(req, res) {
 
 function deriveClientName(clientId, hint) {
   if (hint) return hint;
-  // MCPJam and other clients send a short opaque id or a URL
   if (clientId.startsWith('http')) {
     try { return new URL(clientId).hostname; } catch {}
   }
+  if (clientId === 'connectpx-dashboard') return 'ConnectPX Demo';
   if (clientId.length < 40) return clientId;
-  return 'AI Client'; // long JWT or unknown
+  return 'AI Client';
 }
 
 function redirect(res, uri, params) {
@@ -170,6 +192,16 @@ function redirect(res, uri, params) {
 function esc(s) {
   return String(s || '').replace(/[&<>"']/g,
     c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function parseFormBody(req) {
+  if (req.body != null && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+    return req.body;
+  }
+  if (typeof req.body === 'string' && req.body.length) {
+    return Object.fromEntries(new URLSearchParams(req.body));
+  }
+  return {};
 }
 
 function errorPage(msg) {

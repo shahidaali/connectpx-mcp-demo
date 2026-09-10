@@ -153,21 +153,21 @@
 <!-- Connect card -->
 <div class="connect-card">
   <div class="card-title">AI Connections</div>
-  <div class="card-sub">Pick an AI client to authorize</div>
+  <div class="card-sub">You’re signed in above. Connect an AI client — OAuth will bind it to this account.</div>
 
   <div class="ai-row">
     <div class="ai-left">
       <div class="ai-icon">🤖</div>
       <div><div class="ai-name">Claude (Anthropic)</div><div class="ai-desc">MCP Streamable HTTP + OAuth 2.1</div></div>
     </div>
-    <button class="btn-connect" onclick="startFlow('Claude')">Connect</button>
+    <button class="btn-connect" onclick="startFlow('Claude')">Connect Claude</button>
   </div>
   <div class="ai-row">
     <div class="ai-left">
       <div class="ai-icon">💬</div>
       <div><div class="ai-name">ChatGPT (OpenAI)</div><div class="ai-desc">MCP Streamable HTTP + OAuth 2.1</div></div>
     </div>
-    <button class="btn-connect" onclick="startFlow('ChatGPT')">Connect</button>
+    <button class="btn-connect" onclick="startFlow('ChatGPT')">Connect ChatGPT</button>
   </div>
   <div class="ai-row">
     <div class="ai-left">
@@ -182,12 +182,12 @@
 <div class="flow">
   <h2>How the OAuth 2.1 Flow Works</h2>
   <div class="steps">
-    <div class="step"><div class="step-circle">1</div><div class="step-title">Click Connect</div><div class="step-sub">AI client hits /mcp → 401 + WWW-Authenticate with resource_metadata URL</div></div>
-    <div class="step"><div class="step-circle">2</div><div class="step-title">Discovery</div><div class="step-sub">Fetches /.well-known/oauth-protected-resource (RFC9728)</div></div>
-    <div class="step"><div class="step-circle">3</div><div class="step-title">AS Metadata</div><div class="step-sub">Fetches AS metadata, confirms PKCE S256 support (RFC8414)</div></div>
-    <div class="step"><div class="step-circle">4</div><div class="step-title">Login</div><div class="step-sub">You authenticate &amp; approve on the consent page</div></div>
-    <div class="step"><div class="step-circle">5</div><div class="step-title">Token</div><div class="step-sub">Client exchanges code + PKCE verifier for JWT access token</div></div>
-    <div class="step"><div class="step-circle">6</div><div class="step-title">MCP Access</div><div class="step-sub">AI calls tools — all data scoped to YOUR user account</div></div>
+    <div class="step"><div class="step-circle">1</div><div class="step-title">App user</div><div class="step-sub">You’re already logged into ConnectPX (Laravel session in production)</div></div>
+    <div class="step"><div class="step-circle">2</div><div class="step-title">Connect AI</div><div class="step-sub">Click Connect Claude — client starts OAuth + PKCE</div></div>
+    <div class="step"><div class="step-circle">3</div><div class="step-title">Approve</div><div class="step-sub">Consent page uses your existing session — no re-login needed</div></div>
+    <div class="step"><div class="step-circle">4</div><div class="step-title">Bind</div><div class="step-sub">Auth code &amp; token embed your user_id</div></div>
+    <div class="step"><div class="step-circle">5</div><div class="step-title">Token</div><div class="step-sub">Client exchanges code + PKCE verifier for JWT</div></div>
+    <div class="step"><div class="step-circle">6</div><div class="step-title">MCP tools</div><div class="step-sub">AI queries only YOUR orders, invoices &amp; profile</div></div>
   </div>
 </div>
 
@@ -196,6 +196,7 @@
   <h2>Server Endpoints</h2>
   <table>
     <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+    <tr><td class="meth">POST</td><td><code>/app/login</code></td><td>Establish app session (simulates Laravel login)</td></tr>
     <tr><td class="meth">GET</td><td><code>/.well-known/oauth-protected-resource</code></td><td>RFC9728 — tells clients where the AS is</td></tr>
     <tr><td class="meth">GET</td><td><code>/.well-known/oauth-authorization-server</code></td><td>RFC8414 — AS capabilities + PKCE</td></tr>
     <tr><td class="meth">POST</td><td><code>/oauth/register</code></td><td>Dynamic Client Registration (RFC7591)</td></tr>
@@ -248,14 +249,31 @@ const users = {
 };
 let uid = 1;
 
-function selectUser(id, el) {
+async function ensureAppSession(username) {
+  // Simulate "user already logged into Laravel" — sets HttpOnly cookie
+  // that /oauth/authorize reads so consent skips password re-entry.
+  const resp = await fetch('/app/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ username }),
+  });
+  if (!resp.ok) throw new Error('Could not establish app session');
+  return resp.json();
+}
+
+async function selectUser(id, el) {
   uid = id;
   document.querySelectorAll('.user-chip').forEach(e => e.classList.remove('active'));
   el.classList.add('active');
   const u = users[id];
   document.getElementById('navAv').textContent = u.initial;
   document.getElementById('navName').textContent = u.name;
+  try { await ensureAppSession(u.username); } catch (e) { console.warn(e); }
 }
+
+// Establish session for default user on load
+ensureAppSession(users[1].username).catch(console.warn);
 
 async function sha256b64url(str) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
@@ -269,14 +287,22 @@ function randB64url(n = 32) {
 }
 
 async function startFlow(clientName) {
+  // Ensure app session matches selected user before OAuth
+  try { await ensureAppSession(users[uid].username); } catch (e) {
+    alert('Could not sign you into ConnectPX: ' + e.message);
+    return;
+  }
+
   const verifier   = randB64url(32);
   const challenge  = await sha256b64url(verifier);
   const state      = randB64url(8);
   const resource   = encodeURIComponent(location.origin + '/mcp');
   const redirectUri= encodeURIComponent(location.origin + '/oauth/callback');
 
-  sessionStorage.setItem('pkce_verifier', verifier);
-  sessionStorage.setItem('oauth_state', state);
+  // localStorage so the popup callback window can finish PKCE exchange
+  localStorage.setItem('pkce_verifier', verifier);
+  localStorage.setItem('oauth_state', state);
+  localStorage.setItem('oauth_client_id', 'connectpx-dashboard');
 
   const url = `${location.origin}/oauth/authorize?` + [
     'response_type=code',
@@ -287,11 +313,12 @@ async function startFlow(clientName) {
     'code_challenge_method=S256',
     `state=${state}`,
     `resource=${resource}`,
+    `login_hint=${encodeURIComponent(users[uid].username)}`,
   ].join('&');
 
-  document.getElementById('mTitle').textContent = `Authorize ${clientName}`;
+  document.getElementById('mTitle').textContent = `Connect ${clientName}`;
   document.getElementById('mDesc').textContent =
-    `Signed in as ${users[uid].name}. ${clientName} will be able to read your orders, invoices, and subscriptions via your MCP server.`;
+    `Signed in as ${users[uid].name}. ${clientName} will request access; after you approve, it receives a token scoped to your account.`;
 
   const display = url
     .replace(/&/g, '\n&')
@@ -300,9 +327,11 @@ async function startFlow(clientName) {
   document.getElementById('mUrl').innerHTML = display;
 
   document.getElementById('btnOpen').onclick = () => {
-    window.open(url, '_blank', 'width=520,height=660');
-    closeModal();
+    // Same-tab navigation keeps cookies + localStorage for a clean demo.
+    // Real Claude opens its own browser window against the same domain.
+    location.href = url;
   };
+  document.getElementById('btnOpen').textContent = 'Continue to Authorize';
   document.getElementById('overlay').classList.add('open');
 }
 

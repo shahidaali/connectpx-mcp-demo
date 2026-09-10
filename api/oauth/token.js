@@ -14,7 +14,7 @@ export default async function handler(req, res) {
   // Wrap everything — any uncaught throw must return a proper OAuth error
   // string, not Vercel's {"error": {object}} which breaks clients
   try {
-    const body = req.body || {};
+    const body = await parseBody(req);
 
     if (body.grant_type === 'authorization_code') return await authCodeGrant(res, body);
     if (body.grant_type === 'refresh_token')      return await refreshGrant(res, body);
@@ -28,7 +28,10 @@ export default async function handler(req, res) {
 }
 
 async function authCodeGrant(res, body) {
-  const { code, redirect_uri, client_id, code_verifier } = body;
+  const code          = body.code;
+  const redirect_uri  = body.redirect_uri;
+  const client_id     = body.client_id;
+  const code_verifier = body.code_verifier;
 
   if (!code)          return err(res, 'invalid_request', 'Missing code');
   if (!redirect_uri)  return err(res, 'invalid_request', 'Missing redirect_uri');
@@ -91,4 +94,20 @@ async function refreshGrant(res, body) {
 function err(res, error, description) {
   // error must always be a plain string per OAuth spec (RFC 6749 §5.2)
   return res.status(400).json({ error: String(error), error_description: String(description || '') });
+}
+
+/** Accept JSON or application/x-www-form-urlencoded (OAuth clients use both). */
+async function parseBody(req) {
+  // Vercel usually pre-parses JSON / form bodies into req.body
+  if (req.body != null && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+    return req.body;
+  }
+  if (typeof req.body === 'string' && req.body.length) {
+    const ct = String(req.headers['content-type'] || '');
+    if (ct.includes('application/json')) {
+      try { return JSON.parse(req.body); } catch { return {}; }
+    }
+    return Object.fromEntries(new URLSearchParams(req.body));
+  }
+  return {};
 }

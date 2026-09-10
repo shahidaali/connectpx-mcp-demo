@@ -1,8 +1,20 @@
 # ConnectPX MCP OAuth Demo
 
-MCP server with full OAuth 2.1 + PKCE authentication.  
-**Stack:** Node.js · Vercel serverless · Stateless JWT tokens (no DB needed)  
-**Deploy time:** ~2 minutes from GitHub push
+MCP server with OAuth 2.1 + PKCE that binds an AI client to an **existing app user**.
+
+**Stack:** Node.js · Vercel serverless · Stateless JWT tokens (no DB needed)
+
+---
+
+## Product flow (what this demo implements)
+
+1. User already exists / is signed into ConnectPX (dashboard sets an app session cookie — in production this is your Laravel session)
+2. User clicks **Connect Claude**
+3. AI client starts OAuth 2.1 + PKCE
+4. User approves on the consent page (no password re-entry when app session is present)
+5. System associates the AI client with that user (`user_id` in auth code + access token)
+6. MCP receives a Bearer JWT
+7. Tools read `token.sub` / `username` and return **only that user’s** data
 
 ---
 
@@ -12,7 +24,7 @@ MCP server with full OAuth 2.1 + PKCE authentication.
 
 ```bash
 npm i -g vercel
-cd mcp-oauth-vercel
+cd connectpx-mcp-demo
 vercel          # follow prompts, get instant HTTPS URL
 ```
 
@@ -28,11 +40,22 @@ vercel          # follow prompts, get instant HTTPS URL
 In Vercel Dashboard → Project → Settings → Environment Variables:
 ```
 JWT_SECRET = any-random-32-char-string-you-generate
+MCP_BASE_URL = https://your-project.vercel.app
 ```
 
 ---
 
-## Test it live
+## Try the Connect flow in the browser
+
+1. Open `https://your-project.vercel.app/`
+2. Pick **Ahmad** or **Sara** (establishes app session)
+3. Click **Connect Claude** → **Continue to Authorize**
+4. Click **Allow Access** (you’re already signed in — no password)
+5. Callback exchanges the code + PKCE verifier, then calls `get_my_profile` to prove user scoping
+
+---
+
+## Test it live (API)
 
 ```bash
 BASE=https://your-project.vercel.app
@@ -56,33 +79,37 @@ curl -si -X POST $BASE/mcp \
 
 ---
 
-## Add to Claude Desktop
+## Add to Claude Desktop / Claude with remote MCP
 
-In `claude_desktop_config.json`:
+Point the client at your MCP URL (OAuth discovery does the rest):
+
+```
+https://your-project.vercel.app/mcp
+```
+
+Optional explicit config:
 ```json
 {
   "mcpServers": {
     "connectpx": {
-      "url": "https://your-project.vercel.app/mcp",
-      "oauth": {
-        "authorizationEndpoint": "https://your-project.vercel.app/oauth/authorize",
-        "tokenEndpoint": "https://your-project.vercel.app/oauth/token",
-        "clientId": "connectpx-dashboard",
-        "scope": "mcp:read profile"
-      }
+      "url": "https://your-project.vercel.app/mcp"
     }
   }
 }
 ```
 
+When Claude opens the authorize URL on your domain, if the user already has a ConnectPX session cookie, they only approve — then Claude receives a token for that user.
+
 ---
 
-## Demo credentials (consent page)
+## Demo credentials (consent page fallback)
 
 | User | Username | Password | Data |
 |------|----------|----------|------|
 | Ahmad Raza (Premium) | `ahmad` | `demo123` | 3 orders, 3 invoices, 1 subscription |
 | Sara Khan (Standard) | `sara` | `demo456` | 2 orders, 2 invoices, 1 subscription |
+
+If the dashboard (or Laravel) already set the app session cookie, password fields are hidden.
 
 ---
 
@@ -100,13 +127,10 @@ In `claude_desktop_config.json`:
 
 ## Replace demo data with real Laravel
 
-In `lib/tools.js`, replace the in-memory arrays with real API calls:
+1. **App session:** Replace `/app/login` cookie with your real Laravel session validation in `getAppSession()` (`lib/store.js`).
+2. **Tools:** In `lib/tools.js`, call your Laravel API with the JWT `sub` (user id):
 
 ```js
-// Before (demo):
-const ORDERS = [ { id: 'ORD-1001', user_id: 1, ... }, ... ];
-
-// After (real Laravel API):
 async function getOrders(userId, args) {
   const resp = await fetch(`${process.env.LARAVEL_API}/users/${userId}/orders`, {
     headers: { Authorization: `Bearer ${process.env.INTERNAL_KEY}` }
@@ -121,14 +145,17 @@ async function getOrders(userId, args) {
 ## Architecture
 
 ```
-AI Client (Claude/ChatGPT/Cursor)
+User (already logged into ConnectPX / Laravel)
     │
+    │ Click "Connect Claude"
+    │
+AI Client (Claude)
     │ POST /mcp → 401 + WWW-Authenticate: resource_metadata=...
     │ GET  /.well-known/oauth-protected-resource  (RFC9728)
     │ GET  /.well-known/oauth-authorization-server (RFC8414 + PKCE S256)
-    │ POST /oauth/register   (RFC7591 Dynamic Registration)
-    │ GET  /oauth/authorize  → Login + Consent page
-    │ POST /oauth/token      (PKCE verifier → JWT access token)
+    │ POST /oauth/register   (RFC7591 Dynamic Registration)  [optional]
+    │ GET  /oauth/authorize  → Consent (uses app session if present)
+    │ POST /oauth/token      (PKCE verifier → JWT with user_id)
     │ POST /mcp + Bearer JWT → user-scoped tool results
     ▼
   ConnectPX MCP Server (Vercel)
