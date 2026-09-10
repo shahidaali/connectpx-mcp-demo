@@ -1,6 +1,13 @@
 import { cors, baseUrl, validateAccessToken, createSession, validateSession } from '../lib/store.js';
 import { listTools, callTool } from '../lib/tools.js';
 
+const SUPPORTED_PROTOCOL_VERSIONS = [
+  '2025-11-25',
+  '2025-06-18',
+  '2025-03-26',
+  '2024-11-05',
+];
+
 export default async function handler(req, res) {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(204).end();
@@ -44,36 +51,43 @@ async function handlePost(req, res) {
     return res.status(400).json(rpcErr(-32600, 'Invalid JSON-RPC', null));
   }
 
+  // Batch not used by Claude; reject clearly if sent
+  if (Array.isArray(body)) {
+    return res.status(400).json(rpcErr(-32600, 'Batched JSON-RPC not supported', null));
+  }
+
   const { id, method, params = {} } = body;
 
   // ── initialize: issue MCP session ──
   if (method === 'initialize') {
+    const requested = params.protocolVersion;
+    const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+      ? requested
+      : SUPPORTED_PROTOCOL_VERSIONS[0];
+
     const sessionId = await createSession(tokenData);
     res.setHeader('MCP-Session-Id', sessionId);
     res.setHeader('Content-Type', 'application/json');
     return res.status(200).json(rpcOk({
-      protocolVersion: '2025-11-25',
-      capabilities:    { tools: { listChanged: false } },
-      serverInfo:      { name: 'ConnectPX MCP Demo', version: '1.0.0' },
-      _meta: {
-        userId:   tokenData.sub,
-        username: tokenData.username,
-        scope:    tokenData.scope,
-      },
+      protocolVersion,
+      capabilities: { tools: { listChanged: false } },
+      serverInfo:   { name: 'ConnectPX MCP Demo', version: '1.0.0' },
     }, id));
   }
 
-  // Notifications (no id) — just acknowledge
+  // Notifications (no id) — acknowledge (e.g. notifications/initialized)
   if (id === null || id === undefined) return res.status(202).end();
 
-  // All other methods require a valid session
+  // Session is preferred but optional if Bearer token is valid.
+  // (Bug previously marked every session as type:access so validation always failed.)
   const sessionHeader = req.headers['mcp-session-id'];
-  const session = sessionHeader ? await validateSession(sessionHeader) : null;
-  if (!session) {
-    return res.status(400).json(rpcErr(-32001, 'No valid session — call initialize first', id));
+  if (sessionHeader) {
+    const session = await validateSession(sessionHeader);
+    if (!session) {
+      return res.status(400).json(rpcErr(-32001, 'Invalid or expired MCP session', id));
+    }
   }
 
-  // Scope check for write tools
   if (method === 'tools/call') {
     const writeTool = ['create_order', 'update_profile'].includes(params.name);
     if (writeTool && !tokenData.scope?.includes('mcp:write')) {
@@ -94,7 +108,7 @@ async function handlePost(req, res) {
         }
       }
       case 'ping':
-        return rpcOk({ pong: true }, id);
+        return rpcOk({}, id);
       default:
         return rpcErr(-32601, `Method not found: ${method}`, id);
     }
@@ -118,7 +132,6 @@ async function handleGet(req, res) {
   res.setHeader('X-Accel-Buffering', 'no');
   res.write(`id: init\ndata: \n\n`);
   res.write(`event: ping\ndata: ${JSON.stringify({ time: Date.now() })}\n\n`);
-  // Vercel serverless: can't hold open; client will reconnect
   res.end();
 }
 
@@ -127,7 +140,6 @@ async function handleGet(req, res) {
 async function handleDelete(req, res) {
   const tokenData = await requireToken(req, res);
   if (!tokenData) return;
-  // Sessions are stateless JWTs — nothing to delete server-side
   res.status(200).json({ terminated: true });
 }
 
