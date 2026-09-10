@@ -21,8 +21,9 @@ async function authCodeGrant(req, res, body) {
   const { code, redirect_uri, client_id, code_verifier } = body;
   if (!code || !redirect_uri || !client_id) return err(res, 'invalid_request', 'Missing parameters');
 
-  // Validate client
-  if (!findClient(client_id)) return err(res, 'invalid_client', 'Unknown client');
+  // Validate client (async — dynamic clients are JWT-verified)
+  const client = await findClient(client_id);
+  if (!client) return err(res, 'invalid_client', 'Unknown client');
 
   // Consume auth code (JWT — already validated expiry)
   const authCode = await consumeAuthCode(code);

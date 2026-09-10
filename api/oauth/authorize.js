@@ -11,12 +11,20 @@ export default async function handler(req, res) {
 
 // ── GET: show login + consent page ────────────────────────────────────
 
-function showForm(req, res) {
+async function showForm(req, res) {
   const p = req.query;
   const err = validateParams(p);
   if (err) return res.status(400).send(errorPage(err));
 
-  const client = findClient(p.client_id);
+  const client = await findClient(p.client_id);
+  if (!client) return res.status(400).send(errorPage(`Unknown client_id`));
+
+  // Validate redirect_uri — dynamic clients embed their URIs in the JWT
+  // Static dashboard client accepts any URI for demo convenience
+  if (client.redirect_uris?.length > 0 && !client.redirect_uris.includes(p.redirect_uri)) {
+    return res.status(400).send(errorPage(`redirect_uri not registered for this client`));
+  }
+
   const clientName = client?.client_name || p.client_id;
 
   const scopes = (p.scope || 'mcp:read profile').split(' ').filter(Boolean);
